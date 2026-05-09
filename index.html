@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 
 <style>
@@ -1223,79 +1223,94 @@ async function generateBarcodesPDF() {
     toast('Catalogue vide');
     return;
   }
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
 
-  // Avery L7160
-  const pageW = 210, pageH = 297;
-  const cols = 3, rows = 7;
-  const labelW = 63.5, labelH = 38.1;
-  const marginX = (pageW - cols * labelW) / 2;
-  const marginY = (pageH - rows * labelH) / 2;
+  // Vérifier que les libs sont chargées
+  const QR = window.QRCode || window.qrcode;
+  if (!QR || typeof QR.toDataURL !== 'function') {
+    toast('Lib QR non chargée — vérifie la connexion');
+    console.error('QRCode lib introuvable. window.QRCode=', window.QRCode, 'window.qrcode=', window.qrcode);
+    return;
+  }
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    toast('Lib PDF non chargée — vérifie la connexion');
+    console.error('jsPDF introuvable. window.jspdf=', window.jspdf);
+    return;
+  }
 
-  // Pré-génère tous les QR codes (asynchrone) — couleur noir pur, niveau de correction H (le plus tolérant)
-  const qrDataUrls = await Promise.all(cards.map(card =>
-    QRCode.toDataURL(card.id, {
-      errorCorrectionLevel: 'H',
-      margin: 1,
-      width: 256,
-      color: { dark: '#000000', light: '#ffffff' },
-    })
-  ));
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit: 'mm', format: 'a4' });
 
-  cards.forEach((card, i) => {
-    const idx = i % (cols * rows);
-    if (i > 0 && idx === 0) doc.addPage();
-    const col = idx % cols;
-    const row = Math.floor(idx / cols);
-    const x = marginX + col * labelW;
-    const y = marginY + row * labelH;
+    // Avery L7160
+    const pageW = 210, pageH = 297;
+    const cols = 3, rows = 7;
+    const labelW = 63.5, labelH = 38.1;
+    const marginX = (pageW - cols * labelW) / 2;
+    const marginY = (pageH - rows * labelH) / 2;
 
-    // Cadre léger (utile pour découpe / alignement)
-    doc.setDrawColor(220);
-    doc.setLineWidth(0.1);
-    doc.rect(x, y, labelW, labelH);
+    // Pré-génère tous les QR codes
+    const qrDataUrls = await Promise.all(cards.map(card =>
+      QR.toDataURL(card.id, {
+        errorCorrectionLevel: 'H',
+        margin: 1,
+        width: 256,
+        color: { dark: '#000000', light: '#ffffff' },
+      })
+    ));
 
-    // QR code à gauche — 30×30mm, marge 4mm en haut/bas
-    const qrSize = 30;
-    const qrX = x + 3;
-    const qrY = y + (labelH - qrSize) / 2;
-    try {
+    cards.forEach((card, i) => {
+      const idx = i % (cols * rows);
+      if (i > 0 && idx === 0) doc.addPage();
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      const x = marginX + col * labelW;
+      const y = marginY + row * labelH;
+
+      // Cadre léger (utile pour découpe / alignement)
+      doc.setDrawColor(220);
+      doc.setLineWidth(0.1);
+      doc.rect(x, y, labelW, labelH);
+
+      // QR code à gauche — 30×30mm
+      const qrSize = 30;
+      const qrX = x + 3;
+      const qrY = y + (labelH - qrSize) / 2;
       doc.addImage(qrDataUrls[i], 'PNG', qrX, qrY, qrSize, qrSize);
-    } catch (e) {
-      console.error('QR error:', e);
-    }
 
-    // Zone texte à droite
-    const textX = x + qrSize + 6;
-    const textW = labelW - qrSize - 8;
+      // Zone texte à droite
+      const textX = x + qrSize + 6;
+      const textW = labelW - qrSize - 8;
 
-    // Nom de la carte (multi-ligne, max 2 lignes)
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(20);
-    const nameLines = doc.splitTextToSize(card.name, textW);
-    const displayLines = nameLines.slice(0, 2);
-    if (nameLines.length > 2) displayLines[1] = displayLines[1].slice(0, -1) + '…';
-    displayLines.forEach((line, idx) => {
-      doc.text(line, textX, y + 8 + idx * 4);
+      // Nom de la carte (multi-ligne, max 2 lignes)
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9);
+      doc.setTextColor(20);
+      const nameLines = doc.splitTextToSize(card.name, textW);
+      const displayLines = nameLines.slice(0, 2);
+      if (nameLines.length > 2) displayLines[1] = displayLines[1].slice(0, -1) + '…';
+      displayLines.forEach((line, idx) => {
+        doc.text(line, textX, y + 8 + idx * 4);
+      });
+
+      // Prix bien visible
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(15);
+      doc.setTextColor(238, 21, 21);
+      doc.text(fmtPrice(card.price), textX, y + labelH - 9);
+
+      // ID en petit en bas
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6);
+      doc.setTextColor(120);
+      doc.text(card.id, textX, y + labelH - 4);
     });
 
-    // Prix bien visible
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(15);
-    doc.setTextColor(238, 21, 21);
-    doc.text(fmtPrice(card.price), textX, y + labelH - 9);
-
-    // ID en petit en bas
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6);
-    doc.setTextColor(120);
-    doc.text(card.id, textX, y + labelH - 4);
-  });
-
-  doc.save(`pokebrocante-codes-${todayISO()}.pdf`);
-  toast(`${cards.length} étiquette(s) générée(s)`);
+    doc.save(`pokebrocante-codes-${todayISO()}.pdf`);
+    toast(`${cards.length} étiquette(s) générée(s)`);
+  } catch (err) {
+    console.error('PDF generation error:', err);
+    toast('Erreur PDF : ' + (err.message || err));
+  }
 }
 
 /* =================================================================
