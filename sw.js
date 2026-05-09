@@ -1,11 +1,11 @@
 // Service worker — cache offline pour PokéBrocante
-const CACHE = 'pokebrocante-v2';
+const CACHE = 'pokebrocante-v3';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js',
 ];
 

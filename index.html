@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 
 <style>
@@ -607,7 +607,7 @@
   <div class="section-title">Catalogue</div>
   <div class="header-action-row">
     <button class="btn btn-cardinal" onclick="openCardModal()">+ Nouvelle carte</button>
-    <button class="btn btn-ghost" onclick="generateBarcodesPDF()">📄 Imprimer les codes-barres</button>
+    <button class="btn btn-ghost" onclick="generateBarcodesPDF()">📄 Imprimer les QR codes</button>
   </div>
   <div id="catalog-list"></div>
 </section>
@@ -1114,23 +1114,24 @@ async function startScanner() {
 
   document.getElementById('scan-status').textContent = 'Démarrage de la caméra…';
   try {
-    scanner = new Html5Qrcode('scan-region');
+    scanner = new Html5Qrcode('scan-region', { verbose: false });
     await scanner.start(
       { facingMode: 'environment' },
       {
-        fps: 10,
-        qrbox: { width: 260, height: 140 },
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.QR_CODE,
-        ],
+        fps: 15,
+        qrbox: (vw, vh) => {
+          const m = Math.min(vw, vh);
+          const s = Math.floor(m * 0.72);
+          return { width: s, height: s };
+        },
+        aspectRatio: 1.0,
+        formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true },
       },
       (decoded) => handleScan(decoded),
       () => {}
     );
-    document.getElementById('scan-status').textContent = '◉ Visez un code-barres';
+    document.getElementById('scan-status').textContent = '◉ Visez le QR code';
   } catch (e) {
     document.getElementById('scan-status').textContent = '✕ Caméra inaccessible';
     console.error(e);
@@ -1156,13 +1157,26 @@ async function handleScan(code) {
   await processScannedCode(code);
 }
 
-async function processScannedCode(code) {
+async function processScannedCode(rawCode) {
   const fb = document.getElementById('scan-feedback');
-  const card = cards.find(c => c.id === code);
+  // Normalisation : trim + uppercase pour éviter les soucis de casse
+  const code = String(rawCode).trim().toUpperCase();
+
+  // Recherche stricte
+  let card = cards.find(c => c.id === code);
+
+  // Recherche tolérante : si c'est un QR scanné mais peut-être avec espace/préfixe
+  if (!card) {
+    card = cards.find(c => c.id.toUpperCase() === code);
+  }
 
   if (!card) {
     fb.className = 'scan-feedback err';
-    fb.innerHTML = `<strong>Code inconnu</strong><span>${escapeHtml(code)}</span>`;
+    fb.innerHTML = `
+      <strong>Code inconnu</strong>
+      <span>Lu : <code style="font-family:ui-monospace,Menlo,monospace; background:rgba(255,255,255,0.08); padding:2px 6px; border-radius:4px;">${escapeHtml(code)}</code></span>
+      <span style="display:block; margin-top:6px; font-size:12px; opacity:0.7;">Ce code n'est dans aucune carte du catalogue.</span>
+    `;
     if (navigator.vibrate) navigator.vibrate([80, 50, 80]);
     return;
   }
@@ -1171,9 +1185,9 @@ async function processScannedCode(code) {
   if (!session) return;
 
   // déjà vendue ?
-  if ((session.sales || []).some(x => x.cardId === code)) {
+  if ((session.sales || []).some(x => x.cardId === card.id)) {
     fb.className = 'scan-feedback err';
-    fb.innerHTML = `<strong>Déjà vendue !</strong>${escapeHtml(card.name)} · ${fmtPrice(card.price)}`;
+    fb.innerHTML = `<strong>Déjà vendue !</strong><span>${escapeHtml(card.name)} · ${fmtPrice(card.price)}</span>`;
     if (navigator.vibrate) navigator.vibrate([80, 50, 80]);
     return;
   }
@@ -1200,10 +1214,11 @@ function manualScanInput() {
 }
 
 /* =================================================================
-   PDF DES CODES-BARRES — Format Avery L7160 (21 / page)
+   PDF DES QR CODES — Format Avery L7160 (21 / page)
    63.5 × 38.1 mm — 3 colonnes × 7 lignes
+   QR à gauche, texte à droite
    ================================================================= */
-function generateBarcodesPDF() {
+async function generateBarcodesPDF() {
   if (cards.length === 0) {
     toast('Catalogue vide');
     return;
@@ -1215,11 +1230,20 @@ function generateBarcodesPDF() {
   const pageW = 210, pageH = 297;
   const cols = 3, rows = 7;
   const labelW = 63.5, labelH = 38.1;
-  const marginX = (pageW - cols * labelW) / 2; // ≈ 7.75
-  const marginY = (pageH - rows * labelH) / 2; // ≈ 15.15
+  const marginX = (pageW - cols * labelW) / 2;
+  const marginY = (pageH - rows * labelH) / 2;
 
-  let i = 0;
-  cards.forEach((card) => {
+  // Pré-génère tous les QR codes (asynchrone) — couleur noir pur, niveau de correction H (le plus tolérant)
+  const qrDataUrls = await Promise.all(cards.map(card =>
+    QRCode.toDataURL(card.id, {
+      errorCorrectionLevel: 'H',
+      margin: 1,
+      width: 256,
+      color: { dark: '#000000', light: '#ffffff' },
+    })
+  ));
+
+  cards.forEach((card, i) => {
     const idx = i % (cols * rows);
     if (i > 0 && idx === 0) doc.addPage();
     const col = idx % cols;
@@ -1232,41 +1256,42 @@ function generateBarcodesPDF() {
     doc.setLineWidth(0.1);
     doc.rect(x, y, labelW, labelH);
 
-    // Nom (tronqué si trop long)
+    // QR code à gauche — 30×30mm, marge 4mm en haut/bas
+    const qrSize = 30;
+    const qrX = x + 3;
+    const qrY = y + (labelH - qrSize) / 2;
+    try {
+      doc.addImage(qrDataUrls[i], 'PNG', qrX, qrY, qrSize, qrSize);
+    } catch (e) {
+      console.error('QR error:', e);
+    }
+
+    // Zone texte à droite
+    const textX = x + qrSize + 6;
+    const textW = labelW - qrSize - 8;
+
+    // Nom de la carte (multi-ligne, max 2 lignes)
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.setTextColor(20);
-    const name = card.name.length > 28 ? card.name.slice(0, 27) + '…' : card.name;
-    doc.text(name, x + labelW / 2, y + 5, { align: 'center' });
+    const nameLines = doc.splitTextToSize(card.name, textW);
+    const displayLines = nameLines.slice(0, 2);
+    if (nameLines.length > 2) displayLines[1] = displayLines[1].slice(0, -1) + '…';
+    displayLines.forEach((line, idx) => {
+      doc.text(line, textX, y + 8 + idx * 4);
+    });
 
-    // Prix
+    // Prix bien visible
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.setTextColor(185, 28, 28);
-    doc.text(fmtPrice(card.price), x + labelW / 2, y + 11, { align: 'center' });
+    doc.setFontSize(15);
+    doc.setTextColor(238, 21, 21);
+    doc.text(fmtPrice(card.price), textX, y + labelH - 9);
 
-    // Code-barres : on génère un canvas via JsBarcode, puis on l'insère
-    try {
-      const canvas = document.createElement('canvas');
-      JsBarcode(canvas, card.id, {
-        format: 'CODE128',
-        width: 1.6,
-        height: 50,
-        displayValue: true,
-        fontSize: 14,
-        margin: 0,
-        background: '#ffffff',
-      });
-      const imgData = canvas.toDataURL('image/png');
-      // taille du code-barres : 55mm × 18mm centré
-      const bcW = 55, bcH = 18;
-      doc.addImage(imgData, 'PNG', x + (labelW - bcW) / 2, y + 14, bcW, bcH);
-    } catch (e) {
-      doc.setFontSize(8);
-      doc.text(card.id, x + labelW / 2, y + 22, { align: 'center' });
-    }
-
-    i++;
+    // ID en petit en bas
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6);
+    doc.setTextColor(120);
+    doc.text(card.id, textX, y + labelH - 4);
   });
 
   doc.save(`pokebrocante-codes-${todayISO()}.pdf`);
