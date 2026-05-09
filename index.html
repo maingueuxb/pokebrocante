@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
 
 <style>
@@ -1224,17 +1224,26 @@ async function generateBarcodesPDF() {
     return;
   }
 
-  // Vérifier que les libs sont chargées
-  const QR = window.QRCode || window.qrcode;
-  if (!QR || typeof QR.toDataURL !== 'function') {
+  // Vérifier que la lib QR est chargée — qrcode-generator expose window.qrcode (fonction)
+  if (typeof window.qrcode !== 'function') {
     toast('Lib QR non chargée — vérifie la connexion');
-    console.error('QRCode lib introuvable. window.QRCode=', window.QRCode, 'window.qrcode=', window.qrcode);
+    console.error('qrcode lib introuvable. typeof window.qrcode=', typeof window.qrcode);
     return;
   }
   if (!window.jspdf || !window.jspdf.jsPDF) {
     toast('Lib PDF non chargée — vérifie la connexion');
     console.error('jsPDF introuvable. window.jspdf=', window.jspdf);
     return;
+  }
+
+  // Helper : génère un dataURL PNG d'un QR à partir d'un texte
+  // Utilise typeNumber=0 (auto-détection de version) et niveau de correction H
+  function qrToDataURL(text) {
+    const qr = window.qrcode(0, 'H');
+    qr.addData(text);
+    qr.make();
+    // cellSize = 8px par module, margin = 2 modules
+    return qr.createDataURL(8, 2);
   }
 
   try {
@@ -1247,16 +1256,6 @@ async function generateBarcodesPDF() {
     const labelW = 63.5, labelH = 38.1;
     const marginX = (pageW - cols * labelW) / 2;
     const marginY = (pageH - rows * labelH) / 2;
-
-    // Pré-génère tous les QR codes
-    const qrDataUrls = await Promise.all(cards.map(card =>
-      QR.toDataURL(card.id, {
-        errorCorrectionLevel: 'H',
-        margin: 1,
-        width: 256,
-        color: { dark: '#000000', light: '#ffffff' },
-      })
-    ));
 
     cards.forEach((card, i) => {
       const idx = i % (cols * rows);
@@ -1275,7 +1274,8 @@ async function generateBarcodesPDF() {
       const qrSize = 30;
       const qrX = x + 3;
       const qrY = y + (labelH - qrSize) / 2;
-      doc.addImage(qrDataUrls[i], 'PNG', qrX, qrY, qrSize, qrSize);
+      const qrDataUrl = qrToDataURL(card.id);
+      doc.addImage(qrDataUrl, 'PNG', qrX, qrY, qrSize, qrSize);
 
       // Zone texte à droite
       const textX = x + qrSize + 6;
